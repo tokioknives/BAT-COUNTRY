@@ -664,5 +664,351 @@ requestAnimationFrame(loop);
 })();
 </script>
 
+<script>
+/* ===== ADD-ON: NPCs you can talk to, 4 mini-games, quirky trip sounds ===== */
+(function () {
+  var pick = function (a) { return a[Math.floor(Math.random() * a.length)]; };
+  var rr = function (a, b) { return a + Math.random() * (b - a); };
+  var npcs = [], D = null, M = null, bubbles = [], qT = 3, yellCD = 0, tap = null;
+  var PANEL = { x: 70, y: 80, w: W - 140, h: H - 170 };
+  var EX = { x: PANEL.x + PANEL.w - 92, y: PANEL.y + 10, w: 82, h: 30 };
+  var OY = H - 148;
+  var hit = function (p, r) { return p && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h; };
+
+  C.addEventListener('pointerdown', function (e) {
+    var r = C.getBoundingClientRect();
+    tap = { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H };
+  });
+
+  /* ---------- quirky sounds ---------- */
+  function ac() { try { AC = AC || new (window.AudioContext || window.webkitAudioContext)(); if (AC.state === 'suspended') AC.resume(); return AC; } catch (e) { return null; } }
+  function sweep(f1, f2, d, type, v, delay) {
+    var a = ac(); if (!a) return;
+    try {
+      var o = a.createOscillator(), g = a.createGain(), t0 = a.currentTime + (delay || 0);
+      o.type = type || 'sine'; o.frequency.setValueAtTime(f1, t0); o.frequency.exponentialRampToValueAtTime(Math.max(20, f2), t0 + d);
+      g.gain.setValueAtTime(v || 0.05, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+      o.connect(g); g.connect(a.destination); o.start(t0); o.stop(t0 + d + 0.02);
+    } catch (e) {}
+  }
+  function warble(f, d, v) {
+    var a = ac(); if (!a) return;
+    try {
+      var o = a.createOscillator(), l = a.createOscillator(), lg = a.createGain(), g = a.createGain(), t0 = a.currentTime;
+      o.frequency.value = f; l.frequency.value = rr(8, 16); lg.gain.value = f * 0.25; l.connect(lg); lg.connect(o.frequency);
+      g.gain.setValueAtTime(v, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+      o.connect(g); g.connect(a.destination); o.start(t0); l.start(t0); o.stop(t0 + d); l.stop(t0 + d);
+    } catch (e) {}
+  }
+  var QUIRKS = [
+    function (v) { sweep(200, 900, .25, 'sine', v); sweep(900, 200, .25, 'sine', v, .25); },                          // boing
+    function (v) { warble(rr(300, 700), .9, v); },                                                                      // wobble
+    function (v) { for (var i = 0; i < 6; i++) sweep(500 + i * 90, 700 + i * 110, .07, 'square', v * .6, i * .07); },  // giggle
+    function (v) { sweep(90, 260, 1.1, 'triangle', v * 1.4); },                                                         // whale
+    function (v) { for (var i = 0; i < 3; i++) sweep(2200, 3400, .06, 'sine', v * .6, i * .09); },                      // bat squeak
+    function (v) { for (var i = 0; i < 5; i++) sweep(rr(200, 900), rr(200, 900), .08, 'triangle', v, i * .06); },       // bubbles
+    function (v) { sweep(1500, 80, .5, 'sawtooth', v * .7); },                                                          // laser drop
+    function (v) { sweep(400, 300, .12, 'square', v * .7); sweep(300, 500, .12, 'square', v * .7, .14); sweep(500, 250, .2, 'square', v * .7, .28); } // wah-wah
+  ];
+  function quirk(v) { pick(QUIRKS)(v || 0.05); }
+  function blip(p) { sweep(p * (trip > 50 ? rr(.7, 1.5) : rr(.9, 1.1)), p * rr(.8, 1.3), .05, trip > 50 ? 'sawtooth' : 'square', .025); }
+
+  var YELLS = ['WOOOOO!', 'HEH HEH HEH', 'BWAAAH!', 'PHWEEEEE', '*gurgle*', 'BATS?! BATS!', 'AWOOGA!', 'ZZZZWAP', 'MMMMBOP'];
+  function yell() {
+    if (yellCD > 0) return; yellCD = .45;
+    quirk(.06 + trip / 100 * .04); if (trip > 40) quirk(.04);
+    bubbles.push({ txt: pick(YELLS), x: P.x, y: P.y - 28, life: 1.4 });
+  }
+
+  /* ---------- NPCs ---------- */
+  var G_N = ["Cops get tired easy out here. Duck behind a cactus and count to ten.", "Gas cans glint at dusk. Look for the red flash.", "Never trust a sandwich you didn't count.", "The bats only bite if you're thinking about them.", "The desert is just the ocean without the rude parts.", "Cash grows on the ground if you squint right."];
+  var G_T = ["The cops are made of tinfoil and TUESDAYS.", "Everything you see is one very large raccoon.", "The sky is a ceiling and it knows your name.", "Bats are tiny umbrellas that learned to fly.", "I traded my shadow for a sandwich. Great deal.", "Don't blink. The cactus is making a face."];
+  var DEFS = [
+    { id: 'rosa', name: 'LUCKY ROSA', col: '#e0457b', hat: '#ffd23f', pitch: 520, hi: "Step right up, sugar. My van has a slot machine and zero shame.", th: "The reels are singing your NAME, sugar. Can't you hear the cherries?", opts: [['PLAY SLOTS ($20 a pull)', 'slots'], ['ASK FOR GOSSIP', 'gossip']] },
+    { id: 'gus', name: 'GAS GUS', col: '#8a8a8a', hat: '#e23b3b', pitch: 140, hi: "Gas, grease and gossip, friend. Mostly gas.", th: "My pumps are whispering. Fill up before they start singing.", opts: [['BUY GAS ($20)', 'buygas'], ['WHERE TO NEXT?', 'hint']] },
+    { id: 'doc', name: 'DOC MELLOW', col: '#f5f5f5', hat: '#3ddc6a', pitch: 330, hi: "Capsules, forty bucks. Doctor-approved by a doctor I invented.", th: "Take one. Take two. Take the whole rainbow, it's lonely out here.", opts: [['BUY A CAPSULE ($40)', 'buycap'], ['ASK ABOUT THE TRIP', 'gossip']] },
+    { id: 'moth', name: 'BAT LADY MOTH', col: '#6a3d9a', hat: '#111', pitch: 700, hi: "Those aren't bats, honey. They're opinions with wings.", th: "Oh good, you can see them too. Swat a few for me?", opts: [['BAT SWATTING (earn cash)', 'swat'], ['ASK FOR ADVICE', 'hint']] },
+    { id: 'eddie', name: 'STEADY EDDIE', col: '#2a8fbd', hat: '#fff', pitch: 260, hi: "Hands like glass, nerves like jelly. Think you can beat me?", th: "My hands are WAVING at me. Show them how it's done.", opts: [['STEADY HANDS (earn cash)', 'steady'], ['CHAT', 'gossip']] },
+    { id: 'pete', name: 'PROSPECTOR PETE', col: '#a0693a', hat: '#c9a227', pitch: 190, hi: "Radio's played weird tones since 1974. Wanna copy 'em?", th: "The static is TALKING. Repeat after it, quick!", opts: [['RADIO TUNER (earn cash)', 'radio'], ['CHAT', 'gossip']] },
+    { id: 'trixie', name: 'TOURIST TRIXIE', col: '#ff9a3d', hat: '#ff3df2', pitch: 600, hi: "Is this the scenic route? There's a lot of... cactus.", th: "Everyone's glowing! Is that normal here? Want a sandwich?", opts: [['TAKE THE SANDWICH', 'snack'], ['ASK FOR DIRECTIONS', 'hint']] }
+  ];
+  function spawnNPCs(i) {
+    npcs = []; D = null; M = null; bubbles = [];
+    var n = 5 + (i > 2 ? 1 : 0);
+    for (var k = 0; k < n; k++) {
+      var p = null;
+      for (var tries = 0; tries < 8; tries++) { p = freePos(300); if (!npcs.some(function (o) { return Math.hypot(o.x - p.x, o.y - p.y) < 200; })) break; }
+      npcs.push({ def: DEFS[(i * 2 + k) % DEFS.length], x: p.x, y: p.y, face: Math.random() * 6.28, used: false, ph: Math.random() * 6 });
+    }
+  }
+  function nearNPC(r) { var b = null, bd = r; for (var i = 0; i < npcs.length; i++) { var d = Math.hypot(npcs[i].x - P.x, npcs[i].y - P.y); if (d < bd) { b = npcs[i]; bd = d; } } return b; }
+  function hint() {
+    var s = L.steps[stepIdx]; if (!s) return "Nothing left to do. Go home.";
+    if (s.t === 'collect') return "You still need " + (s.n - (cnt[s.k] || 0)) + " more. Look around the map.";
+    var dx = s.x - P.x, dy = s.y - P.y, d = Math.max(100, Math.round(Math.hypot(dx, dy) / 100) * 100);
+    var dir = (Math.abs(dy) > Math.abs(dx) * .4 ? (dy < 0 ? 'north' : 'south') : '') + (Math.abs(dx) > Math.abs(dy) * .4 ? (dx < 0 ? 'west' : 'east') : '');
+    return s.label + " is about " + d + " paces " + dir + " of here.";
+  }
+  function doAct(k, n) {
+    switch (k) {
+      case 'buygas': if (cash < 20) return "Come back with twenty bucks, partner."; cash -= 20; car.fuel = Math.min(100, car.fuel + 50); beep(500, .15, 'triangle'); return "Tank's fuller. Don't light a match, friend.";
+      case 'buycap': if (cash < 40) return "Forty bucks. I don't do charity, I do chemistry."; cash -= 40; inv.cap = (inv.cap || 0) + 1; beep(700, .15, 'triangle'); return "One capsule, fresh from nowhere. Take it when you're ready.";
+      case 'snack': if (n.used) return "No more sandwiches. Honest!"; n.used = true; sanity = Math.min(3, sanity + 1); beep(600, .15, 'triangle'); return "Ham and mustard. You look like you need it. +1 sanity!";
+      case 'gossip': return pick(trip > 50 ? G_T : G_N);
+      case 'hint': return hint();
+      case 'slots': if (cash < 20) return "No cash, no spin, sugar."; break;
+    }
+    startMini(k, n); return null;
+  }
+  function openTalk(n) {
+    state = 'talk';
+    var txt = trip > 50 ? n.def.th : n.def.hi;
+    D = { n: n, def: n.def, phase: 'say', txt: txt, c: 0, sh: 0, sel: 0, ok: false, ot: 0, opts: n.def.opts.concat([['LEAVE', 'leave']]) };
+    quirk(.04);
+  }
+  function choose(i) {
+    var o = D.opts[i]; if (!o) return;
+    if (o[1] === 'leave') { state = 'play'; D = null; return; }
+    var r = doAct(o[1], D.n);
+    if (r === null) { D = null; return; }
+    D.phase = 'reply'; D.txt = r; D.c = 0; D.sh = 0; D.ok = false;
+  }
+  function stepTalk(dt) {
+    var d = D; d.c += dt * 38; var full = d.txt.length, prev = d.sh;
+    d.sh = Math.min(full, Math.floor(d.c));
+    for (var i = prev; i < d.sh; i++) if (d.txt[i] !== ' ' && i % 2 === 0) blip(d.def.pitch);
+    var go = pressed.Enter || pressed.Space || pressed.KeyE;
+    if (d.sh < full) { if (go || tap) { d.sh = full; d.c = full; } return; }
+    if (!d.ok) { d.ok = true; d.ot = t; return; }
+    if (t - d.ot < .3) return;
+    if (d.phase === 'reply') { if (go || tap) { state = 'play'; D = null; } return; }
+    if (tap) { for (var j = 0; j < d.opts.length; j++) if (hit(tap, { x: 50, y: OY + j * 34, w: W - 100, h: 30 })) { choose(j); return; } return; }
+    for (var k = 0; k < d.opts.length; k++) if (pressed['Digit' + (k + 1)]) { choose(k); return; }
+    if (pressed.ArrowDown || pressed.KeyS) d.sel = (d.sel + 1) % d.opts.length;
+    if (pressed.ArrowUp || pressed.KeyW) d.sel = (d.sel + d.opts.length - 1) % d.opts.length;
+    if (go) choose(d.sel);
+  }
+  function drawTalk() {
+    var d = D, y0 = H - 262;
+    X.fillStyle = 'rgba(8,0,24,.9)'; X.fillRect(30, y0, W - 60, 250); X.strokeStyle = d.def.col; X.lineWidth = 4; X.strokeRect(30, y0, W - 60, 250);
+    text(d.def.name, 50, y0 + 30, 20, d.def.col);
+    wrap(d.txt.slice(0, d.sh), 50, y0 + 62, W - 110, 26, 19, trip > 50 ? 'hsl(' + (t * 80 % 360) + ',100%,78%)' : '#fff');
+    if (d.sh >= d.txt.length) {
+      if (d.phase === 'say') d.opts.forEach(function (o, i) {
+        var y = OY + i * 34; X.fillStyle = i === d.sel ? 'rgba(255,61,242,.35)' : 'rgba(255,255,255,.1)'; X.fillRect(50, y, W - 100, 30);
+        text((i + 1) + ') ' + o[0], 64, y + 21, 16, '#fff');
+      });
+      else text('TAP / ENTER', W - 50, H - 30, 14, '#ffd23f', 'right');
+    }
+  }
+  function drawNPCs() {
+    B.save(); B.translate(-camx, -camy);
+    for (var i = 0; i < npcs.length; i++) {
+      var n = npcs[i]; if (!onScr(n.x - 40, n.y - 50, 80, 90)) continue;
+      var d = Math.hypot(n.x - P.x, n.y - P.y), wob = trip > 40 ? Math.sin(t * 3 + n.ph) * trip / 100 * 5 : 0;
+      if (d < 160) n.face = Math.atan2(P.y - n.y, P.x - n.x);
+      var col = trip > 50 ? 'hsl(' + ((t * 50 + n.ph * 60) % 360) + ',90%,60%)' : n.def.col;
+      var x = n.x + wob, y = n.y + Math.cos(t * 2 + n.ph) * (trip > 40 ? 3 : .8);
+      drawPerson(x, y, n.face, col);
+      B.save(); B.translate(x, y); B.rotate(n.face); B.fillStyle = n.def.hat; B.beginPath(); B.arc(3, 0, 5.2, Math.PI / 2, Math.PI * 1.5); B.fill(); B.restore();
+      B.font = 'bold 12px monospace'; B.textAlign = 'center';
+      if (d < 120) { B.fillStyle = '#fff'; B.fillText(n.def.name, x, y - 22); }
+      if (d < 50 && !P.inCar) { B.fillStyle = '#ffd23f'; B.fillText('[E] TALK', x, y - 36); }
+    }
+    for (var j = 0; j < bubbles.length; j++) { var b = bubbles[j]; B.globalAlpha = clamp(b.life, 0, 1); B.font = 'bold 18px monospace'; B.textAlign = 'center'; B.fillStyle = 'hsl(' + (t * 200 % 360) + ',100%,70%)'; B.fillText(b.txt, b.x, b.y); B.globalAlpha = 1; }
+    B.restore();
+  }
+
+  /* ---------- MINI-GAMES ---------- */
+  var SYM = ['\uD83E\uDD87', '\uD83C\uDF35', '\uD83D\uDCB0', '7', '\u2B50'];
+  var PADC = ['#ff3df2', '#00e5ff', '#ffd23f', '#3ddc6a'], PADF = [330, 392, 494, 587];
+  function PADR(i) { return { x: W / 2 - 180 + (i % 2) * 190, y: 210 + (i >> 1) * 120, w: 170, h: 100 }; }
+  function A() { return pressed.Enter || pressed.Space || pressed.KeyE || tap; }
+  function A2(m) { return A() && m.t - (m.ot || 0) > .5; }
+  function fin(m, reward, msg) { m.over = true; m.ot = m.t; cash += reward; m.res = msg.replace('$X', '$' + reward); }
+  function startMini(k, n) { M = { k: k, n: n, t: 0, over: false }; MG[k].init(M); state = 'mini'; }
+  function endMini(msg) { state = 'play'; M = null; if (msg) say(msg, 3.5); }
+  function panel(title) {
+    X.fillStyle = 'rgba(8,0,24,.88)'; X.fillRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h);
+    X.strokeStyle = 'hsl(' + (t * 90 % 360) + ',100%,60%)'; X.lineWidth = 4; X.strokeRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h);
+    text(title, W / 2, PANEL.y + 38, 24, '#ffd23f', 'center');
+    X.fillStyle = 'rgba(255,255,255,.14)'; X.fillRect(EX.x, EX.y, EX.w, EX.h); text('EXIT', EX.x + EX.w / 2, EX.y + 21, 14, '#fff', 'center');
+  }
+  function resultLine(m) { text(m.res, W / 2, PANEL.y + PANEL.h - 62, 22, '#fff', 'center'); if (Math.floor(t * 2) % 2) text('TAP / ENTER TO CONTINUE', W / 2, PANEL.y + PANEL.h - 28, 15, '#ffd23f', 'center'); }
+  function tone(p) { sweep(PADF[p], PADF[p] * 1.03, .3, 'triangle', .07); }
+
+  var MG = {
+    slots: {
+      init: function (m) { m.r = [0, 0, 0]; m.n = 0; m.over = false; m.res = ''; cash -= 20; },
+      step: function (m) {
+        if (!m.over) {
+          if (A()) {
+            m.r[m.n] = Math.floor(Math.random() * 5); m.n++; sweep(300 + m.n * 150, 500 + m.n * 150, .12, 'square', .05);
+            if (m.n === 3) {
+              var a = m.r[0], b = m.r[1], c = m.r[2], pay = 0;
+              if (a === b && b === c) pay = [150, 100, 200, 400, 120][a]; else if (a === b || b === c || a === c) pay = 30;
+              fin(m, pay, pay ? 'WINNER! +$X' : 'Nothing. The reels laugh at you.');
+              if (pay >= 100) { quirk(.07); quirk(.05); } else if (pay) beep(880, .2, 'triangle', .06); else sweep(300, 80, .4, 'sawtooth', .05);
+            }
+          }
+        } else if (A2(m)) { if (cash >= 20) MG.slots.init(m); else endMini(m.res); }
+      },
+      draw: function (m) {
+        panel("LUCKY ROSA'S SLOT VAN");
+        for (var i = 0; i < 3; i++) {
+          var bx = W / 2 - 215 + i * 150, shown = (i < m.n || m.over) ? SYM[m.r[i]] : SYM[Math.floor(m.t * 12 + i * 2) % 5];
+          X.fillStyle = '#fff'; X.fillRect(bx, 200, 130, 130); X.strokeStyle = '#e0457b'; X.lineWidth = 5; X.strokeRect(bx, 200, 130, 130);
+          text(shown, bx + 65, 285, 70, '#222', 'center');
+        }
+        if (!m.over) text('TAP / ENTER to stop each reel  (' + (3 - m.n) + ' left)', W / 2, 380, 16, '#fff', 'center');
+        else { resultLine(m); if (cash >= 20) text('ANY KEY = SPIN AGAIN ($20)', W / 2, 400, 14, '#aaa', 'center'); }
+        text('Bet: $20   Pair: $30   Three: up to $400', W / 2, PANEL.y + 70, 14, '#aaa', 'center');
+      }
+    },
+    swat: {
+      init: function (m) { m.T = 12; m.bats = []; m.sc = 0; m.sp = 0; m.cx = W / 2; m.cy = H / 2; m.pops = []; },
+      step: function (m, dt) {
+        if (m.over) { if (A2(m)) endMini(m.res); return; }
+        var sx = ((keys.KeyD || keys.ArrowRight) ? 1 : 0) - ((keys.KeyA || keys.ArrowLeft) ? 1 : 0), sy = ((keys.KeyS || keys.ArrowDown) ? 1 : 0) - ((keys.KeyW || keys.ArrowUp) ? 1 : 0);
+        m.cx = clamp(m.cx + sx * 330 * dt, PANEL.x + 10, PANEL.x + PANEL.w - 10); m.cy = clamp(m.cy + sy * 330 * dt, PANEL.y + 60, PANEL.y + PANEL.h - 10);
+        m.sp -= dt; if (m.sp <= 0) { m.sp = rr(.4, .8); m.bats.push({ x: rr(PANEL.x + 50, PANEL.x + PANEL.w - 50), y: rr(PANEL.y + 90, PANEL.y + PANEL.h - 40), life: 1.4 }); }
+        m.bats.forEach(function (b) { b.life -= dt; }); m.bats = m.bats.filter(function (b) { return b.life > 0; });
+        var swat = function (x, y) {
+          for (var i = 0; i < m.bats.length; i++) { var b = m.bats[i]; if (Math.hypot(b.x - x, b.y - y) < 36) { m.bats.splice(i, 1); m.sc++; QUIRKS[4](.06); m.pops.push({ x: x, y: y, l: .5 }); return; } }
+          sweep(200, 120, .1, 'square', .03);
+        };
+        if (tap) swat(tap.x, tap.y); else if (pressed.Enter || pressed.Space || pressed.KeyE) swat(m.cx, m.cy);
+        m.pops.forEach(function (p) { p.l -= dt; }); m.pops = m.pops.filter(function (p) { return p.l > 0; });
+        if (m.t >= m.T) fin(m, m.sc * 12, 'Swatted ' + m.sc + ' bats. +$X');
+      },
+      draw: function (m) {
+        panel('BAT SWATTING');
+        text('TIME ' + Math.max(0, Math.ceil(m.T - m.t)) + '    BATS ' + m.sc, W / 2, PANEL.y + 70, 16, '#fff', 'center');
+        m.bats.forEach(function (b) {
+          var f = Math.sin(m.t * 20 + b.x) * 8, s = 1.6;
+          X.fillStyle = '#7a3dbf'; X.beginPath(); X.moveTo(b.x, b.y); X.lineTo(b.x - 16 * s, b.y - 8 * s + f); X.lineTo(b.x - 6 * s, b.y + 4 * s); X.lineTo(b.x, b.y + 2 * s); X.lineTo(b.x + 6 * s, b.y + 4 * s); X.lineTo(b.x + 16 * s, b.y - 8 * s + f); X.closePath(); X.fill();
+          X.fillStyle = '#f33'; X.fillRect(b.x - 3, b.y - 2, 2.5, 2.5); X.fillRect(b.x + 1, b.y - 2, 2.5, 2.5);
+        });
+        m.pops.forEach(function (p) { text('SPLAT!', p.x, p.y - (0.5 - p.l) * 60, 18, '#ffd23f', 'center'); });
+        X.strokeStyle = '#fff'; X.lineWidth = 2; X.beginPath(); X.arc(m.cx, m.cy, 16, 0, 7); X.moveTo(m.cx - 22, m.cy); X.lineTo(m.cx + 22, m.cy); X.moveTo(m.cx, m.cy - 22); X.lineTo(m.cx, m.cy + 22); X.stroke();
+        if (m.over) resultLine(m); else text('Tap the bats! (or move the crosshair + CAP / ENTER)', W / 2, PANEL.y + PANEL.h - 14, 13, '#aaa', 'center');
+      }
+    },
+    steady: {
+      init: function (m) { m.p = 0; m.d = 1; m.sp = .8; m.rd = 0; m.R = 5; m.hit = 0; m.zc = rr(.25, .75); m.zw = .22; m.fb = ''; m.pos = 0; },
+      step: function (m, dt) {
+        if (m.over) { if (A2(m)) endMini(m.res); return; }
+        m.p += m.d * m.sp * dt; if (m.p > 1) { m.p = 1; m.d = -1; } if (m.p < 0) { m.p = 0; m.d = 1; }
+        m.pos = clamp(m.p + (trip > 40 ? Math.sin(m.t * 7) * .05 * trip / 100 : 0), 0, 1);
+        if (A()) {
+          var ok = Math.abs(m.pos - m.zc) < m.zw / 2;
+          if (ok) { m.hit++; m.fb = 'NICE!'; sweep(500, 900, .15, 'triangle', .06); } else { m.fb = 'WOBBLE!'; sweep(300, 100, .25, 'sawtooth', .05); }
+          m.rd++; m.sp *= 1.2; m.zw = Math.max(.08, m.zw - .025); m.zc = rr(.2, .8);
+          if (m.rd >= m.R) fin(m, m.hit * 18 + (m.hit === m.R ? 30 : 0), 'Steady hands ' + m.hit + '/' + m.R + '. +$X');
+        }
+      },
+      draw: function (m) {
+        panel('STEADY HANDS');
+        var bx = PANEL.x + 60, bw = PANEL.w - 120, by = 260;
+        X.fillStyle = '#333'; X.fillRect(bx, by, bw, 40);
+        X.fillStyle = '#3ddc6a'; X.fillRect(bx + (m.zc - m.zw / 2) * bw, by, m.zw * bw, 40);
+        X.fillStyle = '#fff'; X.fillRect(bx + m.pos * bw - 4, by - 12, 8, 64);
+        text('ROUND ' + Math.min(m.rd + 1, m.R) + '/' + m.R + '    HITS ' + m.hit, W / 2, 200, 18, '#fff', 'center');
+        text(m.fb, W / 2, 350, 28, m.fb === 'NICE!' ? '#3ddc6a' : '#f55', 'center');
+        if (m.over) resultLine(m); else text('TAP / ENTER when the line is in the green', W / 2, 420, 15, '#aaa', 'center');
+      }
+    },
+    radio: {
+      init: function (m) { m.seq = []; for (var i = 0; i < 5; i++) m.seq.push(Math.floor(Math.random() * 4)); m.len = 1; m.ph = 'show'; m.i = 0; m.tm = .8; m.lit = -1; m.in = 0; m.fl = 0; },
+      step: function (m, dt) {
+        if (m.over) { if (A2(m)) endMini(m.res); return; }
+        if (m.ph === 'show') {
+          m.tm -= dt;
+          if (m.tm <= 0) { if (m.lit >= 0) { m.lit = -1; m.tm = .2; } else if (m.i < m.len) { m.lit = m.seq[m.i++]; tone(m.lit); m.tm = .5; } else { m.ph = 'in'; m.in = 0; } }
+          return;
+        }
+        if (m.fl > 0) { m.fl -= dt; if (m.fl <= 0) m.lit = -1; }
+        var p = -1;
+        for (var i = 0; i < 4; i++) { if (pressed['Digit' + (i + 1)]) p = i; if (tap && hit(tap, PADR(i))) p = i; }
+        if (p < 0) return;
+        m.lit = p; m.fl = .2; tone(p);
+        if (p === m.seq[m.in]) {
+          m.in++;
+          if (m.in >= m.len) { if (m.len >= 5) fin(m, 175, 'PERFECT TUNING! +$X'); else { m.len++; m.ph = 'show'; m.i = 0; m.lit = -1; m.tm = .8; } }
+        } else { sweep(300, 80, .4, 'sawtooth', .06); fin(m, (m.len - 1) * 25, 'Static. You got ' + (m.len - 1) + '. +$X'); }
+      },
+      draw: function (m) {
+        panel('RADIO TUNER');
+        for (var i = 0; i < 4; i++) {
+          var r = PADR(i); X.globalAlpha = m.lit === i ? 1 : .4; X.fillStyle = PADC[i]; X.fillRect(r.x, r.y, r.w, r.h); X.globalAlpha = 1;
+          text(String(i + 1), r.x + r.w / 2, r.y + 62, 38, '#000', 'center');
+        }
+        text(m.ph === 'show' ? 'LISTEN...' : 'YOUR TURN: repeat it (tap or keys 1-4)', W / 2, 190, 16, '#fff', 'center');
+        text('Round ' + m.len + ' of 5', W / 2, 460, 14, '#aaa', 'center');
+        if (m.over) resultLine(m);
+      }
+    }
+  };
+  function stepMini(dt) {
+    var m = M; m.t += dt;
+    if (pressed.Escape || hit(tap, EX)) { endMini(m.over ? m.res : 'You wandered off.'); return; }
+    MG[m.k].step(m, dt);
+  }
+
+  /* ---------- hooks into the base game ---------- */
+  var _ll = loadLevel; loadLevel = function (i) { _ll(i); spawnNPCs(i); };
+  var _dw = drawWorld; drawWorld = function () { _dw(); drawNPCs(); };
+  var _up = update;
+  update = function (dt) {
+    yellCD -= dt;
+    if (!P.inCar && pressed.KeyE) { var n = nearNPC(50); if (n) { pressed.KeyE = false; openTalk(n); return; } }
+    if (pressed.KeyQ) yell();
+    var cap0 = inv.cap || 0, bs0 = batSlow, hw0 = hallu.length;
+    _up(dt);
+    if ((inv.cap || 0) < cap0) { sweep(120, 1400, .6, 'sawtooth', .05); quirk(.06); setTimeout(function () { quirk(.05); }, 350); }
+    if (batSlow > bs0 + .5) QUIRKS[4](.07);
+    if (hallu.length > hw0) quirk(.05);
+    qT -= dt;
+    if (trip > 35 && qT <= 0) { qT = Math.max(1.5, rr(4, 9) * (1.1 - trip / 100)); quirk(.03 + trip / 100 * .04); }
+    bubbles.forEach(function (b) { b.life -= dt; b.y -= 25 * dt; }); bubbles = bubbles.filter(function (b) { return b.life > 0; });
+  };
+  var _hud = drawHUD;
+  drawHUD = function () {
+    _hud();
+    var n = nearNPC(P.inCar ? 80 : 50);
+    if (n) { var s = P.inCar ? '[E] get out to talk to ' + n.def.name : '[E] talk to ' + n.def.name; text(s, W / 2, H - 62, 16, '#ffd23f', 'center'); }
+  };
+  var _dtl = drawTitle;
+  drawTitle = function () {
+    _dtl();
+    text(document.body.classList.contains('is-touch') ? 'E talk to people    WOO = yell (weirder when tripping)' : 'E talk to people    Q yell (weirder when tripping)', W / 2, 395, 16, '#ffd9a8', 'center');
+  };
+  var _fr = frame;
+  frame = function (dt) {
+    if (state === 'talk' || state === 'mini') {
+      t += dt;
+      if (state === 'talk') stepTalk(dt); else stepMini(dt);
+      if (state === 'talk' || state === 'mini') {
+        drawWorld(); present();
+        if (state === 'talk') drawTalk(); else MG[M.k].draw(M);
+      }
+    } else _fr(dt);
+    tap = null;
+  };
+  if (L && state === 'intro') spawnNPCs(lvl);
+
+  /* WOO button for touch screens */
+  var st = document.createElement('style');
+  st.textContent = '#bWoo{width:64px;height:64px;right:calc(104px + env(safe-area-inset-right,0px));bottom:calc(122px + env(safe-area-inset-bottom,0px));font-size:15px;background:rgba(255,61,242,.2);border-color:rgba(255,61,242,.8);box-shadow:0 0 14px #ff3df2aa}';
+  document.head.appendChild(st);
+  var tc = document.getElementById('touch');
+  if (tc) {
+    var wb = document.createElement('div'); wb.className = 'tbtn'; wb.id = 'bWoo'; wb.textContent = 'WOO'; tc.appendChild(wb);
+    wb.addEventListener('pointerdown', function (e) { e.preventDefault(); wb.classList.add('down'); pressed.KeyQ = true; });
+    var wu = function () { wb.classList.remove('down'); }; wb.addEventListener('pointerup', wu); wb.addEventListener('pointercancel', wu);
+  }
+})();
+</script>
+
 </body>
 </html>
