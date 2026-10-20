@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Bat Country: A Neon Desert Fever Dream</title>
+<style>
+  html,body{margin:0;height:100%;background:#07040f;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:min(100vw,calc(100vh*1.6));height:auto;aspect-ratio:960/600;image-rendering:auto;box-shadow:0 0 60px #ff3df255}
+  #err{position:fixed;left:0;right:0;top:0;padding:10px;background:#900;color:#fff;font:14px monospace;display:none;z-index:9}
+</style>
+</head>
+<body>
+<div id="err"></div>
+<canvas id="game" width="960" height="600" tabindex="0" onclick="this.focus()"></canvas>
+<script>
+  window.addEventListener('error', function (e) {
+    var d = document.getElementById('err');
+    d.style.display = 'block';
+    d.textContent = 'Error: ' + e.message + (e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : '');
+  });
+</script>
+<script>
+'use strict';
+/* BAT COUNTRY: A Neon Desert Fever Dream
+   A fan homage: original characters and text. 7 chapters, open-world top-down. */
+
+const W = 960, H = 600;
+const C = document.getElementById('game');
+const X = C.getContext('2d');
+C.width = W; C.height = H;
+const buf = document.createElement('canvas'); buf.width = W; buf.height = H;
+const B = buf.getContext('2d');
+
+let seed = 1;
+function rnd() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+const R = (a, b) => a + rnd() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const pressed = {}, keys = {};
+addEventListener('keydown', e => {
+  if (!keys[e.code]) pressed[e.code] = true;
+  keys[e.code] = true;
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+let AC;
+function beep(f, d = 0.1, type = 'square', v = 0.04) {
+  try {
+    AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = type; o.frequency.value = f; g.gain.value = v;
+    o.connect(g); g.connect(AC.destination); o.start();
+    g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + d); o.stop(AC.currentTime + d);
+  } catch (e) { /* audio optional */ }
+}
+
+/* ---------------- LEVELS ---------------- */
+const LEVELS = [
+  { title: 'BAT COUNTRY', sub: 'The Desert Highway', type: 'desert', road: true, w: 3200, h: 1300, bg: '#c98f4e',
+    spawn: [200, 650], cops: 0,
+    intro: ['A red convertible, a trunk full of bad ideas, and a highway with no end.',
+            'Stock up on supplies, find the stranded hitchhiker, and race toward the glow on the horizon.',
+            'Tip: SPACE takes a capsule. Things get weird. The bats arrive on schedule.'],
+    items: { cap: 4, gas: 3, cash: 2, snack: 2 },
+    steps: [
+      { t: 'collect', k: 'cap', n: 3, text: 'Gather mystery capsules' },
+      { t: 'collect', k: 'gas', n: 2, text: 'Find gas cans for the long haul' },
+      { t: 'go', x: 1900, y: 650, label: 'HITCHHIKER', npc: 'kid', text: 'Pick up the hitchhiker on the highway' },
+      { t: 'go', x: 3050, y: 650, label: 'CITY LIMITS', text: 'Reach the neon glow ahead' } ] },
+  { title: 'CHECK-IN AT NEON CITY', sub: 'The Strip', type: 'city', w: 2800, h: 2000, bg: '#23283a',
+    spawn: [1400, 1900], cops: 2, sight: 220,
+    intro: ['The city is a slot machine the size of a county. Your attorney lands at the airport soon.',
+            'Collect him, scrape together the rental deposit, and claim the hotel suite.'],
+    items: { cash: 6, gas: 2, cap: 2, snack: 2 },
+    steps: [
+      { t: 'go', x: 300, y: 320, label: 'AIRPORT', npc: 'counsel', text: 'Meet your attorney at the airport' },
+      { t: 'collect', k: 'cash', n: 4, text: 'Scrape together the rental deposit' },
+      { t: 'go', x: 2500, y: 420, label: 'HOTEL', text: 'Check in at the hotel' } ] },
+  { title: 'THE GREAT DUST RACE', sub: 'Out in the Desert', type: 'desert', road: false, w: 4000, h: 1600, bg: '#b9824a',
+    spawn: [300, 800], cops: 2, sight: 260,
+    intro: ['A desert race, a press badge, and engine noise that rattles your teeth.',
+            'Grab your press pass, then hit every checkpoint before the dust settles.'],
+    items: { press: 1, gas: 4, cap: 3, cash: 3, snack: 2 },
+    steps: [
+      { t: 'collect', k: 'press', n: 1, text: 'Grab the press pass' },
+      { t: 'go', x: 1000, y: 400, label: 'CHECKPOINT 1', text: 'Hit checkpoint 1' },
+      { t: 'go', x: 2000, y: 1200, label: 'CHECKPOINT 2', text: 'Hit checkpoint 2' },
+      { t: 'go', x: 3000, y: 450, label: 'CHECKPOINT 3', text: 'Hit checkpoint 3' },
+      { t: 'go', x: 3800, y: 800, label: 'FINISH', text: 'Cross the finish line' } ] },
+  { title: 'CARNIVAL CASINO', sub: 'Under the Big Top', type: 'casino', w: 2400, h: 2400, bg: '#1a0f2e',
+    spawn: [200, 2200], cops: 3, sight: 230,
+    intro: ['A circus and a casino had a baby and it never stopped screaming.',
+            'Collect tokens, cash them in, and chase the visions that only show when your trip meter is high.'],
+    items: { token: 6, vision: 3, cap: 3, cash: 2, snack: 2, gas: 1 },
+    steps: [
+      { t: 'collect', k: 'token', n: 6, text: 'Collect casino tokens' },
+      { t: 'go', x: 1200, y: 1200, label: 'CASHIER', text: 'Cash in at the cashier' },
+      { t: 'collect', k: 'vision', n: 3, text: 'Catch the visions (trip meter 35+)' },
+      { t: 'go', x: 2200, y: 200, label: 'EXIT', text: 'Find the exit' } ] },
+  { title: 'CONVENTION OF THE LAW', sub: 'Hundreds of Badges', type: 'city', w: 2600, h: 2000, bg: '#1d2b33',
+    spawn: [200, 1800], cops: 8, sight: 210, copSpeed: 165,
+    intro: ['Every cop in the country is in one hotel. Naturally, you are too.',
+            'Swipe conference leaflets, crash the podium, and slip out. Keep your head down.'],
+    items: { leaflet: 3, cap: 2, snack: 3, cash: 3, gas: 2 },
+    steps: [
+      { t: 'collect', k: 'leaflet', n: 3, text: 'Swipe conference leaflets' },
+      { t: 'go', x: 1300, y: 300, label: 'STAGE', text: 'Crash the podium' },
+      { t: 'go', x: 2400, y: 1800, label: 'ESCAPE', text: 'Slip out the back' } ] },
+  { title: 'THE BILL IS DUE', sub: 'Hotel Checkout', type: 'city', w: 2200, h: 1800, bg: '#2d2230',
+    spawn: [1100, 1650], cops: 5, sight: 240, copSpeed: 160,
+    intro: ['The suite looks like a crime scene. The bill looks like a ransom note.',
+            'Scrape together cash, settle at the front desk, then bolt for the car park.'],
+    items: { cash: 9, snack: 2, cap: 2, gas: 1 },
+    steps: [
+      { t: 'collect', k: 'cash', n: 8, text: 'Scrape together the bill' },
+      { t: 'go', x: 1100, y: 200, label: 'FRONT DESK', text: 'Pay at the front desk' },
+      { t: 'go', x: 200, y: 1600, label: 'CAR PARK', text: 'Flee to the car park' } ] },
+  { title: 'THE HIGH-WATER MARK', sub: 'The Great American Dream', type: 'dream', w: 3000, h: 2400, bg: '#2a1650',
+    spawn: [1500, 2250], cops: 0, minTrip: 60,
+    intro: ['No cops. No bill. Just the long climb and the glow of everything that almost was.',
+            'Gather the fading visions, then reach the top where the wave once crested.'],
+    items: { vision: 5, snack: 1, cap: 3 },
+    steps: [
+      { t: 'collect', k: 'vision', n: 5, text: 'Gather the fading visions' },
+      { t: 'go', x: 1500, y: 200, label: 'THE CREST', text: 'Reach the high-water mark' } ] }
+];
+
+const WORDS = ['THE DESERT IS BREATHING', 'SOMEONE IS SELLING THE SKY', 'THE NEON HUMS YOUR NAME', 'EVERYTHING IS A SLOT MACHINE',
+  'THE ROAD HAS TEETH', 'WHO ORDERED THIS CIRCUS', 'THE BATS KNOW', 'DOLLARS ARE TURNING TO MOTHS', 'THE CAR IS LAUGHING'];
+const POPS = ['WHITE RABBIT VIBES', 'COLORS HAVE FLAVORS NOW', 'HOLD THE WHEEL...', 'REALITY IS LAGGING', 'SMOOTH.'];
+
+/* ---------------- STATE ---------------- */
+let state = 'title', lvl = 0, L = null, t = 0;
+let solids = [], items = [], cops = [], bats = [], pois = [], hallu = [];
+let P, car, trip = 0, sanity = 3, cash = 0, inv = { cap: 2 }, cnt = {}, stepIdx = 0;
+let bustCD = 0, batSlow = 0, shake = 0, msg = '', msgT = 0, camx = 0, camy = 0, wordT = 4, batT = 0;
+
+function say(s, d = 2.5) { msg = s; msgT = d; }
+
+function loadLevel(i) {
+  lvl = i; L = LEVELS[i]; seed = 1000 + i * 77;
+  solids = []; items = []; cops = []; bats = []; pois = []; hallu = [];
+  cnt = {}; stepIdx = 0; trip = Math.max(trip * 0.3, L.minTrip || 0); bustCD = 0; batSlow = 0;
+  inv.cap = (inv.cap || 0) + 2;
+  genWorld();
+  P = { x: L.spawn[0], y: L.spawn[1], vx: 0, vy: 0, face: 0, inCar: true };
+  car = { x: P.x, y: P.y, ang: 0, fuel: 100 };
+  L.steps.forEach((s, n) => { if (s.t === 'go') pois.push({ x: s.x, y: s.y, label: s.label, npc: s.npc, step: n }); });
+  for (const k in L.items) for (let n = 0; n < L.items[k]; n++) { const p = freePos(250); items.push({ k, x: p.x, y: p.y }); }
+  for (let n = 0; n < L.cops; n++) {
+    const p = freePos(600), wp = [freePos(0), freePos(0), freePos(0)];
+    cops.push({ x: p.x, y: p.y, hx: p.x, hy: p.y, wp, wi: 0, chase: false });
+  }
+  L.deco = [];
+  for (let n = 0; n < 380; n++) L.deco.push({ x: R(0, L.w), y: R(0, L.h), r: R(1, 3.5), c: rnd() });
+  state = 'intro';
+  say('', 0);
+}
+
+function genWorld() {
+  const clear = [{ x: L.spawn[0], y: L.spawn[1], r: 200 }];
+  L.steps.forEach(s => { if (s.t === 'go') clear.push({ x: s.x, y: s.y, r: 160 }); });
+  const isClear = (x, y, pad) => clear.some(c => Math.hypot(c.x - x, c.y - y) < c.r + pad);
+  if (L.type === 'city' || L.type === 'casino') {
+    const cell = 420;
+    for (let cx = 0; cx * cell < L.w; cx++) for (let cy = 0; cy * cell < L.h; cy++) {
+      const x = cx * cell + 90, y = cy * cell + 90;
+      const w = Math.min(cell - 180, L.w - x - 20), h = Math.min(cell - 180, L.h - y - 20);
+      if (w < 80 || h < 80) continue;
+      if (isClear(x + w / 2, y + h / 2, Math.max(w, h) / 2)) continue;
+      solids.push({ x, y, w, h, kind: 'bld', hue: Math.floor(R(0, 360)), s: rnd() });
+    }
+  } else {
+    const n = Math.floor(L.w * L.h / 45000);
+    for (let i = 0; i < n; i++) {
+      const x = R(60, L.w - 60), y = R(60, L.h - 60);
+      if (L.road && Math.abs(y - L.h / 2) < 110) continue;
+      if (isClear(x, y, 40)) continue;
+      if (L.type === 'dream') solids.push({ x: x - 14, y: y - 30, w: 28, h: 60, kind: 'crystal', hue: Math.floor(R(260, 340)) });
+      else if (rnd() < 0.6) solids.push({ x: x - 9, y: y - 14, w: 18, h: 28, kind: 'cactus' });
+      else solids.push({ x: x - 20, y: y - 14, w: 40, h: 28, kind: 'rock' });
+    }
+  }
+}
+
+function freePos(minFromSpawn) {
+  for (let i = 0; i < 400; i++) {
+    const x = R(80, L.w - 80), y = R(80, L.h - 80);
+    if (solids.some(s => x > s.x - 26 && x < s.x + s.w + 26 && y > s.y - 26 && y < s.y + s.h + 26)) continue;
+    if (Math.hypot(x - L.spawn[0], y - L.spawn[1]) < minFromSpawn) continue;
+    return { x, y };
+  }
+  return { x: L.spawn[0] + 100, y: L.spawn[1] };
+}
+
+/* ---------------- MOVEMENT ---------------- */
+function move(e, dx, dy, r) {
+  e.x += dx; e.y += dy;
+  for (const s of solids) {
+    if (e.x < s.x - r - 2 || e.x > s.x + s.w + r + 2 || e.y < s.y - r - 2 || e.y > s.y + s.h + r + 2) continue;
+    const cx = clamp(e.x, s.x, s.x + s.w), cy = clamp(e.y, s.y, s.y + s.h);
+    const ox = e.x - cx, oy = e.y - cy, d = Math.hypot(ox, oy);
+    if (d < r) {
+      if (d === 0) { e.y = s.y - r; } else { e.x += ox / d * (r - d); e.y += oy / d * (r - d); }
+    }
+  }
+  e.x = clamp(e.x, r, L.w - r); e.y = clamp(e.y, r, L.h - r);
+}
+
+/* ---------------- UPDATE ---------------- */
+function update(dt) {
+  t += dt;
+  const ix0 = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+  const iy0 = (keys.KeyS || keys.ArrowDown ? 1 : 0) - (keys.KeyW || keys.ArrowUp ? 1 : 0);
+  const len = Math.hypot(ix0, iy0) || 1;
+  let ix = ix0 / len, iy = iy0 / len;
+  const drift = trip > 70 ? Math.sin(t * 2) * 0.4 * (trip - 70) / 30 : 0;
+  const c = Math.cos(drift), s = Math.sin(drift);
+  const jx = ix * c - iy * s, jy = ix * s + iy * c;
+  let maxS = P.inCar ? (car.fuel > 0 ? 340 : 110) : 150;
+  if (batSlow > 0) maxS *= 0.6;
+  const acc = P.inCar ? 3 : 10;
+  P.vx += (jx * maxS - P.vx) * Math.min(1, acc * dt);
+  P.vy += (jy * maxS - P.vy) * Math.min(1, acc * dt);
+  move(P, P.vx * dt, P.vy * dt, P.inCar ? 15 : 9);
+  const sp = Math.hypot(P.vx, P.vy);
+  if (sp > 12) P.face = Math.atan2(P.vy, P.vx);
+  if (P.inCar) { car.x = P.x; car.y = P.y; car.ang = P.face; car.fuel = Math.max(0, car.fuel - sp / 340 * 3.5 * dt); if (car.fuel === 0 && sp > 20) say('OUT OF GAS! Find a gas can.', 1); }
+
+  if (pressed.KeyE) {
+    if (P.inCar) { P.inCar = false; P.x = car.x + 32; P.y = car.y; move(P, 0, 0, 9); P.vx = P.vy = 0; }
+    else if (Math.hypot(P.x - car.x, P.y - car.y) < 55) { P.inCar = true; P.x = car.x; P.y = car.y; }
+  }
+  if (pressed.Space && (inv.cap || 0) > 0) {
+    inv.cap--; trip = Math.min(100, trip + 30); beep(220, 0.4, 'sawtooth', 0.06);
+    say(POPS[Math.floor(Math.random() * POPS.length)], 2);
+  }
+  trip = Math.max(L.minTrip || 0, trip - 2.2 * dt);
+  if (L.minTrip && trip < L.minTrip) trip = L.minTrip;
+
+  // pickups
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.k === 'vision' && trip < 35) continue;
+    if (Math.hypot(it.x - P.x, it.y - P.y) < (P.inCar ? 32 : 24)) {
+      items.splice(i, 1); cnt[it.k] = (cnt[it.k] || 0) + 1; beep(660, 0.12, 'square');
+      if (it.k === 'cash') { cash += 60; say('+$60'); }
+      else if (it.k === 'snack') { sanity = Math.min(3, sanity + 1); say('Greasy snack: +1 sanity'); }
+      else if (it.k === 'gas') { car.fuel = Math.min(100, car.fuel + 50); say('Gas up!'); }
+      else if (it.k === 'cap') { inv.cap = (inv.cap || 0) + 1; say('Capsule stashed. SPACE to take one.'); }
+      else if (it.k === 'vision') { say('A vision flickers into your hands.'); }
+      else say('Got: ' + it.k);
+    }
+  }
+  // objectives
+  const st = L.steps[stepIdx];
+  if (st) {
+    let done = false;
+    if (st.t === 'collect') done = (cnt[st.k] || 0) >= st.n;
+    else if (Math.hypot(st.x - P.x, st.y - P.y) < 75) done = true;
+    if (done) { beep(880, 0.25, 'triangle', 0.07); stepIdx++; if (stepIdx < L.steps.length) say('Done! Next: ' + L.steps[stepIdx].text, 3); }
+    if (stepIdx >= L.steps.length) { state = 'outro'; sanity = Math.min(3, sanity + 1); }
+  }
+
+  // cops
+  if (bustCD > 0) bustCD -= dt;
+  for (const k of cops) {
+    const d = Math.hypot(P.x - k.x, P.y - k.y), sight = (L.sight || 230) * (P.inCar ? 1.2 : 1);
+    if (d < sight && bustCD <= 0) k.chase = true; else if (d > sight * 1.7) k.chase = false;
+    let tx, ty, spd;
+    if (k.chase) { tx = P.x; ty = P.y; spd = L.copSpeed || 150; }
+    else {
+      const w = k.wp[k.wi]; tx = w.x; ty = w.y; spd = 70;
+      if (Math.hypot(tx - k.x, ty - k.y) < 30) k.wi = (k.wi + 1) % k.wp.length;
+    }
+    const a = Math.atan2(ty - k.y, tx - k.x); k.ang = a;
+    move(k, Math.cos(a) * spd * dt, Math.sin(a) * spd * dt, 9);
+    if (d < (P.inCar ? 28 : 21) && bustCD <= 0) busted();
+  }
+
+  // bats
+  batT -= dt;
+  const want = trip > 40 ? Math.min(10, Math.floor((trip - 40) / 6) + 1) : 0;
+  if (bats.length < want && batT <= 0) {
+    const a = Math.random() * 6.28; bats.push({ x: P.x + Math.cos(a) * 520, y: P.y + Math.sin(a) * 520, ph: Math.random() * 6 }); batT = 0.6;
+  }
+  if (bats.length > want) bats.pop();
+  batSlow = Math.max(0, batSlow - dt); shake = Math.max(0, shake - dt * 3);
+  for (const b of bats) {
+    b.ph += dt * 9;
+    const a = Math.atan2(P.y - b.y, P.x - b.x) + Math.sin(b.ph * 0.4) * 1.3;
+    b.x += Math.cos(a) * 150 * dt; b.y += Math.sin(a) * 150 * dt;
+    if (Math.hypot(b.x - P.x, b.y - P.y) < 20) { batSlow = 1.2; shake = 0.6; }
+  }
+  // hallucination words
+  wordT -= dt;
+  if (trip > 50 && wordT <= 0) {
+    wordT = 3 + Math.random() * 3;
+    hallu.push({ txt: WORDS[Math.floor(Math.random() * WORDS.length)], x: 80 + Math.random() * 560, y: 120 + Math.random() * 380, life: 2.5, rot: (Math.random() - 0.5) * 0.4 });
+  }
+  hallu.forEach(h => h.life -= dt); hallu = hallu.filter(h => h.life > 0);
+  if (msgT > 0) msgT -= dt;
+}
+
+function busted() {
+  sanity--; cash = Math.max(0, cash - 40); bustCD = 3; shake = 1; beep(120, 0.5, 'sawtooth', 0.08);
+  if (sanity <= 0) { state = 'dead'; return; }
+  P.x = L.spawn[0]; P.y = L.spawn[1]; P.vx = P.vy = 0; P.inCar = true; car.x = P.x; car.y = P.y;
+  cops.forEach(k => { k.x = k.hx; k.y = k.hy; k.chase = false; });
+  say('BUSTED! -1 sanity, -$40. Back to the start.', 3);
+}
+
+/* ---------------- DRAWING ---------------- */
+function hash(a, b) { const v = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return v - Math.floor(v); }
+const onScr = (x, y, w, h) => x + w > camx && x < camx + W && y + h > camy && y < camy + H;
+
+function drawItem(it) {
+  if (!onScr(it.x - 20, it.y - 20, 40, 40)) return;
+  B.save(); B.translate(it.x, it.y + Math.sin(t * 3 + it.x) * 3); B.textAlign = 'center';
+  switch (it.k) {
+    case 'cap': B.rotate(0.6); B.fillStyle = '#ff3df2'; B.fillRect(-10, -5, 10, 10); B.fillStyle = '#fff'; B.fillRect(0, -5, 10, 10); B.strokeStyle = '#000'; B.lineWidth = 1.5; B.strokeRect(-10, -5, 20, 10); break;
+    case 'cash': B.fillStyle = '#3ddc6a'; B.fillRect(-13, -8, 26, 16); B.fillStyle = '#0a3d1a'; B.font = 'bold 14px monospace'; B.fillText('$', 0, 5); break;
+    case 'gas': B.fillStyle = '#e23b3b'; B.fillRect(-9, -11, 18, 22); B.fillStyle = '#fff'; B.font = 'bold 12px monospace'; B.fillText('G', 0, 5); break;
+    case 'snack': B.fillStyle = '#f5a623'; B.beginPath(); B.arc(0, 0, 10, 0, 7); B.fill(); B.fillStyle = '#7a3b00'; B.fillRect(-8, -2, 16, 4); break;
+    case 'token': B.fillStyle = '#ffd23f'; B.beginPath(); B.arc(0, 0, 11, 0, 7); B.fill(); B.strokeStyle = '#a87000'; B.lineWidth = 2; B.stroke(); B.fillStyle = '#a87000'; B.font = 'bold 12px monospace'; B.fillText('*', 0, 5); break;
+    case 'vision': { B.globalAlpha = clamp((trip - 20) / 30, 0, 1); B.fillStyle = 'hsl(' + (t * 120 % 360) + ',100%,60%)'; B.rotate(t * 2); B.fillRect(-9, -9, 18, 18); break; }
+    case 'press': B.fillStyle = '#fff'; B.fillRect(-12, -9, 24, 18); B.fillStyle = '#c33'; B.fillRect(-12, -9, 24, 5); B.fillStyle = '#333'; B.font = 'bold 9px monospace'; B.fillText('PRESS', 0, 7); break;
+    case 'leaflet': B.fillStyle = '#efe6c8'; B.fillRect(-9, -11, 18, 22); B.fillStyle = '#666'; for (let i = -7; i < 9; i += 4) B.fillRect(-6, i, 12, 1.5); break;
+  }
+  B.restore();
+}
+
+function drawCar(x, y, ang) {
+  B.save(); B.translate(x, y); B.rotate(ang);
+  B.fillStyle = 'rgba(0,0,0,.35)'; B.fillRect(-21, -9, 44, 24);
+  B.fillStyle = '#d4202a'; B.fillRect(-22, -12, 44, 24);
+  B.fillStyle = '#7a0f16'; B.fillRect(-4, -9, 14, 18);
+  B.fillStyle = '#9fd8ff'; B.fillRect(8, -10, 4, 20);
+  B.fillStyle = '#fff6a8'; B.fillRect(20, -10, 3, 5); B.fillRect(20, 5, 3, 5);
+  B.restore();
+}
+function drawPerson(x, y, ang, shirt) {
+  B.save(); B.translate(x, y);
+  B.fillStyle = 'rgba(0,0,0,.3)'; B.beginPath(); B.ellipse(2, 4, 10, 7, 0, 0, 7); B.fill();
+  B.fillStyle = shirt; B.beginPath(); B.arc(0, 0, 9, 0, 7); B.fill();
+  B.rotate(ang); B.fillStyle = '#f0c8a0'; B.beginPath(); B.arc(3, 0, 5, 0, 7); B.fill();
+  B.fillStyle = '#2a5d3a'; B.fillRect(3, -6, 7, 12);
+  B.restore();
+}
+
+function drawBuilding(s) {
+  B.fillStyle = L.type === 'casino' ? '#2b1648' : '#363c58'; B.fillRect(s.x, s.y, s.w, s.h);
+  for (let y = s.y + 14; y < s.y + s.h - 10; y += 26) for (let x = s.x + 14; x < s.x + s.w - 10; x += 26) {
+    const lit = hash(x, y) > 0.55 && (hash(x + 1, y + t * 0.0) + Math.sin(t + x * 0.1 + y) * 0.02) > 0.4;
+    B.fillStyle = lit ? 'hsl(' + ((s.hue + x) % 360) + ',90%,65%)' : '#1b1f33';
+    B.fillRect(x, y, 9, 9);
+  }
+  B.strokeStyle = 'hsl(' + ((s.hue + t * 40) % 360) + ',100%,60%)'; B.lineWidth = 4; B.strokeRect(s.x, s.y, s.w, s.h);
+}
+
+function drawWorld() {
+  const shk = shake > 0 ? (Math.random() - 0.5) * shake * 12 : 0;
+  camx = clamp(P.x - W / 2, 0, Math.max(0, L.w - W)) + shk; camy = clamp(P.y - H / 2, 0, Math.max(0, L.h - H)) + shk;
+  B.save(); B.fillStyle = L.bg; B.fillRect(0, 0, W, H);
+  B.translate(-camx, -camy);
+  if (L.type === 'desert' || L.type === 'dream') {
+    for (const d of L.deco) if (onScr(d.x, d.y, 4, 4)) { B.fillStyle = L.type === 'dream' ? 'hsl(' + (280 + d.c * 60) + ',70%,' + (30 + d.c * 25) + '%)' : (d.c > 0.5 ? '#b27a3f' : '#d9a566'); B.fillRect(d.x, d.y, d.r * 2, d.r); }
+    if (L.road) {
+      B.fillStyle = '#3a3a44'; B.fillRect(0, L.h / 2 - 90, L.w, 180);
+      B.fillStyle = '#e8d34a'; for (let x = 0; x < L.w; x += 90) if (x + 50 > camx && x < camx + W) B.fillRect(x, L.h / 2 - 3, 50, 6);
+    }
+  } else {
+    const cell = 420; B.fillStyle = '#555a78';
+    for (let cx = 0; cx * cell <= L.w; cx++) { const x = cx * cell; if (x < camx - 10 || x > camx + W + 10) continue; for (let y = Math.floor(camy / 60) * 60; y < camy + H; y += 60) B.fillRect(x - 2, y, 4, 28); }
+    for (let cy = 0; cy * cell <= L.h; cy++) { const y = cy * cell; if (y < camy - 10 || y > camy + H + 10) continue; for (let x = Math.floor(camx / 60) * 60; x < camx + W; x += 60) B.fillRect(x, y - 2, 28, 4); }
+  }
+  // goal markers
+  const st = L.steps[stepIdx];
+  for (const p of pois) {
+    if (st !== L.steps[p.step]) continue;
+    const pulse = 60 + Math.sin(t * 4) * 8;
+    B.strokeStyle = 'hsl(' + (t * 90 % 360) + ',100%,60%)'; B.lineWidth = 5; B.beginPath(); B.arc(p.x, p.y, pulse, 0, 7); B.stroke();
+    B.fillStyle = 'rgba(255,255,255,.08)'; B.beginPath(); B.arc(p.x, p.y, pulse, 0, 7); B.fill();
+    if (p.npc === 'counsel') drawPerson(p.x, p.y, 0, '#18a9a0');
+    if (p.npc === 'kid') drawPerson(p.x, p.y, 0, '#e8e8e8');
+    B.fillStyle = '#fff'; B.font = 'bold 16px monospace'; B.textAlign = 'center'; B.fillText(p.label, p.x, p.y - pulse - 10);
+  }
+  // solids
+  for (const s of solids) {
+    if (!onScr(s.x, s.y, s.w, s.h)) continue;
+    if (s.kind === 'bld') drawBuilding(s);
+    else if (s.kind === 'cactus') { B.fillStyle = '#2f7d3a'; B.fillRect(s.x + 5, s.y, 8, 28); B.fillRect(s.x, s.y + 8, 18, 5); B.fillRect(s.x, s.y + 3, 4, 10); B.fillRect(s.x + 14, s.y + 3, 4, 10); }
+    else if (s.kind === 'rock') { B.fillStyle = '#7a6552'; B.beginPath(); B.ellipse(s.x + 20, s.y + 16, 20, 14, 0, 0, 7); B.fill(); B.fillStyle = '#9a8268'; B.beginPath(); B.ellipse(s.x + 16, s.y + 12, 10, 6, 0, 0, 7); B.fill(); }
+    else if (s.kind === 'crystal') { B.fillStyle = 'hsl(' + s.hue + ',80%,' + (50 + Math.sin(t * 2 + s.x) * 12) + '%)'; B.beginPath(); B.moveTo(s.x + 14, s.y); B.lineTo(s.x + 28, s.y + 60); B.lineTo(s.x, s.y + 60); B.fill(); }
+  }
+  for (const it of items) drawItem(it);
+  drawCar(car.x, car.y, car.ang);
+  if (!P.inCar) drawPerson(P.x, P.y, P.face, '#f07a2a');
+  for (const k of cops) {
+    if (!onScr(k.x - 20, k.y - 20, 40, 40)) continue;
+    drawPerson(k.x, k.y, k.ang || 0, '#2848c8');
+    B.fillStyle = Math.floor(t * 6) % 2 ? '#f33' : '#39f'; B.fillRect(k.x - 3, k.y - 14, 6, 4);
+    if (k.chase) { B.fillStyle = '#fff'; B.font = 'bold 18px monospace'; B.textAlign = 'center'; B.fillText('!', k.x, k.y - 20); }
+  }
+  for (const b of bats) {
+    const f = Math.sin(b.ph) * 8; B.fillStyle = '#080808';
+    B.beginPath(); B.moveTo(b.x, b.y); B.lineTo(b.x - 16, b.y - 8 + f); B.lineTo(b.x - 6, b.y + 4); B.lineTo(b.x, b.y + 2); B.lineTo(b.x + 6, b.y + 4); B.lineTo(b.x + 16, b.y - 8 + f); B.closePath(); B.fill();
+    B.fillStyle = '#f33'; B.fillRect(b.x - 2, b.y - 1, 1.5, 1.5); B.fillRect(b.x + 1, b.y - 1, 1.5, 1.5);
+  }
+  B.restore();
+}
+
+function present() {
+  const amp = trip / 100 * 16;
+  X.fillStyle = L.bg; X.fillRect(0, 0, W, H);
+  if (amp < 0.6) X.drawImage(buf, 0, 0);
+  else for (let y = 0; y < H; y += 4) X.drawImage(buf, 0, y, W, 4, Math.sin(y * 0.03 + t * 3) * amp, y, W, 4);
+  if (trip > 50) { X.globalAlpha = 0.18; X.globalCompositeOperation = 'lighter'; X.drawImage(buf, Math.sin(t * 2) * 12, Math.cos(t * 1.7) * 8); X.globalCompositeOperation = 'source-over'; X.globalAlpha = 1; }
+  if (trip > 5) {
+    X.globalCompositeOperation = 'overlay'; X.globalAlpha = trip / 100 * 0.55;
+    X.fillStyle = 'hsl(' + (t * 60 % 360) + ',90%,55%)'; X.fillRect(0, 0, W, H);
+    X.globalCompositeOperation = 'source-over'; X.globalAlpha = 1;
+  }
+  const g = X.createRadialGradient(W / 2, H / 2, H * 0.35, W / 2, H / 2, H * 0.85);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,' + (0.45 + trip / 250) + ')');
+  X.fillStyle = g; X.fillRect(0, 0, W, H);
+  if (sanity === 1 && Math.floor(t * 3) % 2) { X.fillStyle = 'rgba(255,0,0,.08)'; X.fillRect(0, 0, W, H); }
+}
+
+function text(s, x, y, size, color, align) {
+  X.font = 'bold ' + size + 'px monospace'; X.fillStyle = color || '#fff'; X.textAlign = align || 'left'; X.fillText(s, x, y);
+}
+function wrap(s, x, y, maxW, lh, size, color, align) {
+  X.font = size + 'px monospace'; const words = s.split(' '); let line = '';
+  for (const w of words) {
+    if (X.measureText(line + w).width > maxW) { text(line, x, y, size, color, align); line = ''; y += lh; }
+    line += w + ' ';
+  }
+  text(line, x, y, size, color, align); return y + lh;
+}
+
+function drawHUD() {
+  X.fillStyle = 'rgba(0,0,0,.55)'; X.fillRect(0, 0, W, 54);
+  text('CH.' + (lvl + 1) + '  ' + L.title, 12, 22, 16, '#ffd23f');
+  const st = L.steps[stepIdx];
+  if (st) {
+    const prog = st.t === 'collect' ? ' (' + Math.min(cnt[st.k] || 0, st.n) + '/' + st.n + ')' : '';
+    text('> ' + st.text + prog, 12, 44, 14, '#fff');
+  }
+  text('$' + cash, W - 12, 22, 16, '#3ddc6a', 'right');
+  text('SANITY ' + '♥'.repeat(Math.max(0, sanity)) + '♡'.repeat(Math.max(0, 3 - sanity)), W - 12, 44, 14, '#ff6a8a', 'right');
+  // trip meter
+  X.fillStyle = 'rgba(0,0,0,.6)'; X.fillRect(10, H - 54, 240, 44);
+  const gr = X.createLinearGradient(14, 0, 246, 0); gr.addColorStop(0, '#39f'); gr.addColorStop(0.5, '#f3f'); gr.addColorStop(1, '#fd3');
+  X.fillStyle = '#222'; X.fillRect(14, H - 28, 232, 12); X.fillStyle = gr; X.fillRect(14, H - 28, 232 * trip / 100, 12);
+  text('TRIP', 14, H - 34, 12, '#fff'); text('[SPACE] capsule x' + (inv.cap || 0), 246, H - 34, 12, '#ff9bf5', 'right');
+  if (P.inCar) { X.fillStyle = '#222'; X.fillRect(260, H - 28, 100, 12); X.fillStyle = car.fuel < 25 ? '#f33' : '#fd3'; X.fillRect(260, H - 28, car.fuel, 12); text('GAS', 260, H - 34, 12, '#fff'); }
+  else if (Math.hypot(P.x - car.x, P.y - car.y) < 55) text('[E] get in car', W / 2, H - 20, 16, '#fff', 'center');
+  if (!P.inCar && Math.hypot(P.x - car.x, P.y - car.y) >= 55) text('[E] near car to drive', 260, H - 34, 12, '#aaa');
+  // message
+  if (msgT > 0 && msg) { text(msg, W / 2, 84, 18, '#fff', 'center'); }
+  // hallucination text
+  for (const h of hallu) { X.save(); X.translate(h.x, h.y); X.rotate(h.rot); X.globalAlpha = Math.min(1, h.life); text(h.txt, 0, 0, 26, 'hsl(' + (t * 200 % 360) + ',100%,65%)'); X.restore(); }
+  // arrow to target
+  let tx = null, ty = null;
+  if (st && st.t === 'go') { tx = st.x; ty = st.y; }
+  else if (st) { let best = 1e9; for (const it of items) if (it.k === st.k && (it.k !== 'vision' || trip >= 35)) { const d = Math.hypot(it.x - P.x, it.y - P.y); if (d < best) { best = d; tx = it.x; ty = it.y; } } }
+  if (st && st.k === 'vision' && trip < 35) text('Visions need a TRIP of 35+. Take a capsule!', W / 2, 110, 14, '#7ff', 'center');
+  if (tx !== null) {
+    const sx = tx - camx, sy = ty - camy;
+    if (sx < 20 || sx > W - 20 || sy < 70 || sy > H - 70) {
+      const a = Math.atan2(sy - H / 2, sx - W / 2), ax = clamp(W / 2 + Math.cos(a) * 1000, 30, W - 30), ay = clamp(H / 2 + Math.sin(a) * 1000, 80, H - 70);
+      X.save(); X.translate(ax, ay); X.rotate(a); X.fillStyle = '#ffd23f'; X.beginPath(); X.moveTo(14, 0); X.lineTo(-10, -10); X.lineTo(-10, 10); X.fill(); X.restore();
+    }
+    // minimap
+    const mw = 150, mh = Math.round(150 * L.h / L.w), mx = W - mw - 10, my = H - mh - 10;
+    X.fillStyle = 'rgba(0,0,0,.6)'; X.fillRect(mx, my, mw, mh);
+    X.fillStyle = 'rgba(255,255,255,.2)'; for (const s of solids) X.fillRect(mx + s.x / L.w * mw, my + s.y / L.h * mh, Math.max(1, s.w / L.w * mw), Math.max(1, s.h / L.h * mh));
+    X.fillStyle = '#ffd23f'; X.fillRect(mx + tx / L.w * mw - 2, my + ty / L.h * mh - 2, 5, 5);
+    X.fillStyle = '#f33'; for (const k of cops) if (Math.hypot(k.x - P.x, k.y - P.y) < 700) X.fillRect(mx + k.x / L.w * mw - 1, my + k.y / L.h * mh - 1, 3, 3);
+    X.fillStyle = '#fff'; X.fillRect(mx + P.x / L.w * mw - 2, my + P.y / L.h * mh - 2, 4, 4);
+  }
+}
+
+function screenBG(a, b) { const g = X.createLinearGradient(0, 0, 0, H); g.addColorStop(0, a); g.addColorStop(1, b); X.fillStyle = g; X.fillRect(0, 0, W, H); }
+
+function drawTitle() {
+  screenBG('#1a0533', '#ff5e3a');
+  X.fillStyle = 'rgba(0,0,0,.35)'; for (let i = 0; i < 12; i++) X.fillRect(0, 380 + i * 18, W, 8 - i * 0.5);
+  text('BAT COUNTRY', W / 2, 160, 72, 'hsl(' + (t * 50 % 360) + ',100%,65%)', 'center');
+  text('A NEON DESERT FEVER DREAM', W / 2, 205, 22, '#fff', 'center');
+  text('an open-world fan homage in seven chapters', W / 2, 235, 15, '#ffd9a8', 'center');
+  text('WASD / ARROWS move    E car on/off    SPACE take a capsule', W / 2, 330, 16, '#fff', 'center');
+  text('Avoid the cops. Chase the dream. Mind the bats.', W / 2, 360, 16, '#fff', 'center');
+  if (Math.floor(t * 2) % 2) text('PRESS ENTER TO START   (keys 1-7 jump to a chapter)', W / 2, 470, 20, '#ffd23f', 'center');
+  drawBat(130 + Math.sin(t) * 40, 100 + Math.cos(t * 1.3) * 20); drawBat(820 + Math.cos(t) * 50, 120 + Math.sin(t * 1.1) * 25);
+}
+function drawBat(x, y) { const f = Math.sin(t * 9) * 10; X.fillStyle = '#000'; X.beginPath(); X.moveTo(x, y); X.lineTo(x - 30, y - 14 + f); X.lineTo(x - 10, y + 8); X.lineTo(x + 10, y + 8); X.lineTo(x + 30, y - 14 + f); X.closePath(); X.fill(); }
+
+function drawIntro() {
+  screenBG('#0e0720', '#2a1650');
+  text('CHAPTER ' + (lvl + 1), W / 2, 130, 22, '#ffd23f', 'center');
+  text(L.title, W / 2, 190, 44, 'hsl(' + (t * 50 % 360) + ',100%,65%)', 'center');
+  text(L.sub, W / 2, 225, 18, '#ffd9a8', 'center');
+  let y = 300; for (const line of L.intro) y = wrap(line, W / 2, y, 720, 26, 18, '#fff', 'center') + 8;
+  if (Math.floor(t * 2) % 2) text('PRESS ENTER', W / 2, 520, 20, '#ffd23f', 'center');
+}
+function drawOutro() {
+  screenBG('#0e0720', '#1f6b4a');
+  text('CHAPTER COMPLETE', W / 2, 200, 44, '#ffd23f', 'center');
+  text(L.title, W / 2, 245, 22, '#fff', 'center');
+  text('Cash: $' + cash + '    Sanity: ' + '♥'.repeat(sanity), W / 2, 320, 20, '#fff', 'center');
+  if (Math.floor(t * 2) % 2) text(lvl < LEVELS.length - 1 ? 'PRESS ENTER FOR THE NEXT CHAPTER' : 'PRESS ENTER', W / 2, 460, 20, '#ffd23f', 'center');
+}
+function drawDead() {
+  screenBG('#200000', '#600');
+  text('THE TRIP ENDS HERE', W / 2, 240, 48, '#f55', 'center');
+  text('The law caught up. Sanity gone.', W / 2, 290, 20, '#fff', 'center');
+  if (Math.floor(t * 2) % 2) text('PRESS ENTER TO RETRY THE CHAPTER', W / 2, 400, 20, '#ffd23f', 'center');
+}
+function drawWin() {
+  screenBG('#12062a', '#ff5e3a');
+  text('THE END', W / 2, 130, 56, '#ffd23f', 'center');
+  const lines = ['You stood where the wave once crested and looked back at the long dark rolling away.',
+    'The dream was never a place. It was a feeling that kept moving the second you got close.',
+    'The neon will be there tomorrow. So will the bats.', 'Final cash: $' + cash];
+  let y = 220; for (const l of lines) y = wrap(l, W / 2, y, 740, 26, 18, '#fff', 'center') + 10;
+  if (Math.floor(t * 2) % 2) text('PRESS ENTER FOR THE TITLE SCREEN', W / 2, 540, 18, '#ffd23f', 'center');
+}
+
+/* ---------------- LOOP ---------------- */
+function startNew(i) { cash = 0; sanity = 3; trip = 0; inv = { cap: 0 }; loadLevel(i); }
+
+function frame(dt) {
+  if (state === 'title') {
+    t += dt;
+    if (pressed.Enter) startNew(0);
+    for (let i = 1; i <= LEVELS.length; i++) if (pressed['Digit' + i]) startNew(i - 1);
+    drawTitle();
+  } else if (state === 'intro') { t += dt; if (pressed.Enter) state = 'play'; drawIntro(); }
+  else if (state === 'play') { update(dt); if (state === 'play') { drawWorld(); present(); drawHUD(); } else frameOver(); }
+  else frameOver(dt);
+}
+function frameOver(dt) {
+  t += dt || 0;
+  if (state === 'outro') { if (pressed.Enter) { if (lvl < LEVELS.length - 1) loadLevel(lvl + 1); else state = 'win'; } drawOutro(); }
+  else if (state === 'dead') { if (pressed.Enter) { sanity = 3; loadLevel(lvl); } drawDead(); }
+  else if (state === 'win') { if (pressed.Enter) state = 'title'; drawWin(); }
+}
+
+let last = 0;
+function loop(ts) {
+  const dt = Math.min(0.05, (ts - last) / 1000 || 0.016); last = ts;
+  frame(dt);
+  for (const k in pressed) pressed[k] = false;
+  requestAnimationFrame(loop);
+}
+const q = typeof location !== 'undefined' && /[?&]level=(\d)/.exec(location.search);
+if (q) startNew(clamp(parseInt(q[1], 10) - 1, 0, LEVELS.length - 1));
+requestAnimationFrame(loop);
+
+</script>
+<style>
+  #touch{position:fixed;inset:0;pointer-events:none;display:none;z-index:5;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:none}
+  body.is-touch #touch{display:block}
+  html,body{touch-action:none;-webkit-tap-highlight-color:transparent}
+  #pad{position:absolute;left:calc(18px + env(safe-area-inset-left,0px));bottom:calc(18px + env(safe-area-inset-bottom,0px));width:150px;height:150px;border-radius:50%;background:rgba(255,61,242,.12);border:2px solid rgba(255,61,242,.55);pointer-events:auto;touch-action:none}
+  #knob{position:absolute;left:50%;top:50%;width:62px;height:62px;margin:-31px 0 0 -31px;border-radius:50%;background:rgba(255,255,255,.35);border:2px solid rgba(255,255,255,.7);box-shadow:0 0 16px #ff3df2aa}
+  .tbtn{position:absolute;pointer-events:auto;touch-action:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font:bold 20px monospace;color:#fff;background:rgba(0,229,255,.18);border:2px solid rgba(0,229,255,.7);box-shadow:0 0 14px #00e5ff66}
+  .tbtn.down{background:rgba(255,255,255,.4)}
+  #bE{width:76px;height:76px;right:calc(18px + env(safe-area-inset-right,0px));bottom:calc(98px + env(safe-area-inset-bottom,0px))}
+  #bCap{width:88px;height:88px;right:calc(104px + env(safe-area-inset-right,0px));bottom:calc(22px + env(safe-area-inset-bottom,0px));font-size:16px;background:rgba(255,211,63,.18);border-color:rgba(255,211,63,.8);box-shadow:0 0 14px #ffd23f66}
+  #bStart{width:auto;height:auto;border-radius:20px;padding:8px 14px;right:calc(12px + env(safe-area-inset-right,0px));top:calc(10px + env(safe-area-inset-top,0px));font-size:14px;background:rgba(0,0,0,.45);border-color:rgba(255,255,255,.6);box-shadow:none}
+  #rotate{position:absolute;left:0;right:0;top:calc(8px + env(safe-area-inset-top,0px));text-align:center;font:13px monospace;color:#ffd9a8;display:none}
+  @media (orientation:portrait){body.is-touch #rotate{display:block}}
+</style>
+<div id="touch">
+  <div id="rotate">&#8635; Rotate your phone sideways for a bigger screen</div>
+  <div id="pad"><div id="knob"></div></div>
+  <div class="tbtn" id="bE" data-key="KeyE">E</div>
+  <div class="tbtn" id="bCap" data-key="Space">CAP</div>
+  <div class="tbtn" id="bStart" data-key="Enter">START</div>
+</div>
+<script>
+/* ---- Touch controls: feed the same keys/pressed objects the keyboard uses ---- */
+(function () {
+  var forced = /[?&]touch=1/.test(location.search);
+  var isTouch = forced || ('ontouchstart' in window) || (navigator.maxTouchPoints > 0) ||
+                (window.matchMedia && matchMedia('(pointer: coarse)').matches);
+  if (!isTouch) return;
+  document.body.classList.add('is-touch');
+
+  function setKey(code, down) {
+    if (down && !keys[code]) pressed[code] = true;
+    keys[code] = down;
+  }
+
+  // Unlock audio on first touch (iOS/Android need a user gesture)
+  function unlockAudio() {
+    try {
+      AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+      if (AC.state === 'suspended') AC.resume();
+    } catch (e) {}
+  }
+  addEventListener('pointerdown', unlockAudio, { passive: true });
+
+  // Action buttons (E, CAP, START)
+  document.querySelectorAll('.tbtn').forEach(function (b) {
+    var code = b.getAttribute('data-key');
+    b.addEventListener('pointerdown', function (e) {
+      e.preventDefault(); b.setPointerCapture(e.pointerId); b.classList.add('down'); setKey(code, true);
+    });
+    function up(e) { b.classList.remove('down'); setKey(code, false); }
+    b.addEventListener('pointerup', up);
+    b.addEventListener('pointercancel', up);
+    b.addEventListener('lostpointercapture', up);
+  });
+
+  // Joystick -> arrow keys
+  var pad = document.getElementById('pad'), knob = document.getElementById('knob'), active = null;
+  function release() {
+    active = null; knob.style.transform = '';
+    setKey('ArrowLeft', false); setKey('ArrowRight', false); setKey('ArrowUp', false); setKey('ArrowDown', false);
+  }
+  function drive(e) {
+    var r = pad.getBoundingClientRect(), R = r.width / 2;
+    var dx = (e.clientX - (r.left + R)) / R, dy = (e.clientY - (r.top + R)) / R;
+    var len = Math.hypot(dx, dy); if (len > 1) { dx /= len; dy /= len; }
+    knob.style.transform = 'translate(' + (dx * R * 0.55) + 'px,' + (dy * R * 0.55) + 'px)';
+    var dead = 0.28;
+    setKey('ArrowLeft', dx < -dead); setKey('ArrowRight', dx > dead);
+    setKey('ArrowUp', dy < -dead);   setKey('ArrowDown', dy > dead);
+  }
+  pad.addEventListener('pointerdown', function (e) { e.preventDefault(); active = e.pointerId; pad.setPointerCapture(e.pointerId); drive(e); });
+  pad.addEventListener('pointermove', function (e) { if (e.pointerId === active) drive(e); });
+  pad.addEventListener('pointerup', release);
+  pad.addEventListener('pointercancel', release);
+  pad.addEventListener('lostpointercapture', release);
+
+  // Tap the game screen to advance menus (same as ENTER) when not playing
+  C.addEventListener('pointerdown', function () { if (state !== 'play') pressed.Enter = true; });
+
+  var _wrap = wrap;
+  wrap = function (s) {
+    if (typeof s === 'string') { s = s.replace(/SPACE/g, 'CAP').replace(/PRESS ENTER/g, 'TAP'); }
+    arguments[0] = s;
+    return _wrap.apply(this, arguments);
+  };
+
+  // Swap keyboard wording for touch wording in on-screen text
+  var _text = text;
+  text = function (s) {
+    if (typeof s === 'string') {
+      s = s.replace('WASD / ARROWS move    E car on/off    SPACE take a capsule', 'JOYSTICK move    E car on/off    CAP take a capsule')
+           .replace('PRESS ENTER TO START   (keys 1-7 jump to a chapter)', 'TAP THE SCREEN TO START')
+           .replace('[SPACE]', '[CAP]')
+           .replace(/PRESS ENTER/g, 'TAP THE SCREEN')
+           .replace(/\bSPACE\b/g, 'CAP');
+    }
+    arguments[0] = s;
+    return _text.apply(this, arguments);
+  };
+})();
+</script>
+
+</body>
+</html>
